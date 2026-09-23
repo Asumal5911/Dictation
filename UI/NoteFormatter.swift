@@ -12,16 +12,6 @@ final class ContextualNoteFormatter: @unchecked Sendable {
             return
         }
 
-        let sourceWordCount = source.split(whereSeparator: { $0.isWhitespace }).count
-        // For long lecture transcripts (> 600 words), on-device SystemLanguageModel has a 2048 token
-        // ceiling that truncates the transcript, causing fidelity checks to reject the rewrite.
-        // Whisper Large v3 Turbo already punctuates sentences; basicCleanup formats paragraphs faithfully.
-        if sourceWordCount > 600 {
-            print("ℹ️ Lecture transcript contains \(sourceWordCount) words; using high-fidelity direct note formatting")
-            completion(basicCleanup(source))
-            return
-        }
-
         guard #available(macOS 26.0, *) else {
             completion(basicCleanup(source))
             return
@@ -47,35 +37,53 @@ final class ContextualNoteFormatter: @unchecked Sendable {
             DispatchQueue.main.async { completion(text) }
         }
 
-        // Safety timeout: if Apple Intelligence stalls for 60 seconds, dispatch basic cleanup immediately
-        DispatchQueue.global().asyncAfter(deadline: .now() + 60) {
+        // Safety timeout: if Apple Intelligence stalls for 180 seconds, dispatch basic cleanup immediately
+        DispatchQueue.global().asyncAfter(deadline: .now() + 180) {
             dispatchOnce(self.basicCleanup(source))
         }
 
         Task {
-            do {
-                let session = LanguageModelSession(
-                    model: model,
-                    instructions: Self.editorInstructions
-                )
-                let tokenLimit = min(2_048, max(256, sourceWordCount * 4))
-                let response = try await session.respond(
-                    to: "RAW TRANSCRIPT:\n\(source)\n\nReturn only the finished notes.",
-                    options: GenerationOptions(
-                        sampling: .greedy,
-                        maximumResponseTokens: tokenLimit
-                    )
-                )
-                let candidate = self.emphasizeExplicitTakeaway(in: self.sanitize(response.content))
-                let result = self.isFaithful(candidate, to: source) ? candidate : self.basicCleanup(source)
-                if result != candidate {
-                    print("ℹ️ Note rewrite failed fidelity checks; preserved the original wording")
-                }
-                dispatchOnce(result)
-            } catch {
-                print("ℹ️ Contextual note formatting unavailable: \(error.localizedDescription)")
-                dispatchOnce(self.basicCleanup(source))
+            let words = source.split(whereSeparator: { $0.isWhitespace })
+            let chunkSize = 400
+            var chunks: [String] = []
+            
+            for i in stride(from: 0, to: words.count, by: chunkSize) {
+                let end = min(i + chunkSize, words.count)
+                let chunk = words[i..<end].joined(separator: " ")
+                chunks.append(chunk)
             }
+
+            var formattedChunks: [String] = []
+            
+            for chunk in chunks {
+                do {
+                    let session = LanguageModelSession(
+                        model: model,
+                        instructions: Self.editorInstructions
+                    )
+                    let chunkWordCount = chunk.split(whereSeparator: { $0.isWhitespace }).count
+                    let tokenLimit = min(2_048, max(256, chunkWordCount * 4))
+                    let response = try await session.respond(
+                        to: "RAW TRANSCRIPT:\n\(chunk)\n\nReturn only the finished notes.",
+                        options: GenerationOptions(
+                            sampling: .greedy,
+                            maximumResponseTokens: tokenLimit
+                        )
+                    )
+                    let candidate = self.emphasizeExplicitTakeaway(in: self.sanitize(response.content))
+                    let result = self.isFaithful(candidate, to: chunk) ? candidate : self.basicCleanup(chunk)
+                    if result != candidate {
+                        print("ℹ️ Note rewrite failed fidelity checks for a chunk; preserved the original wording")
+                    }
+                    formattedChunks.append(result)
+                } catch {
+                    print("ℹ️ Contextual note formatting unavailable for chunk: \(error.localizedDescription)")
+                    formattedChunks.append(self.basicCleanup(chunk))
+                }
+            }
+            
+            let finalResult = formattedChunks.joined(separator: "\n\n")
+            dispatchOnce(finalResult)
         }
     }
 
