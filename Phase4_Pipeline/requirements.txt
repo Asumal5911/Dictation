@@ -1,0 +1,5 @@
+mlx-whisper
+soundfile
+numpy
+torch
+torchaudio
