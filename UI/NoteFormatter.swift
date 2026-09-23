@@ -5,6 +5,20 @@ import FoundationModels
 /// A fresh session is used for every dictation so one note cannot leak context
 /// into the next one.
 final class ContextualNoteFormatter: @unchecked Sendable {
+    private func logDebug(_ msg: String) {
+        let url = URL(fileURLWithPath: "/tmp/dictation_debug.txt")
+        let text = "[\(Date())] \(msg)\n"
+        if let handle = try? FileHandle(forWritingTo: url) {
+            handle.seekToEndOfFile()
+            if let data = text.data(using: .utf8) {
+                handle.write(data)
+            }
+            handle.closeFile()
+        } else {
+            try? text.write(to: url, atomically: true, encoding: .utf8)
+        }
+    }
+
     func format(_ rawText: String, completion: @escaping (String) -> Void) {
         let source = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !source.isEmpty else {
@@ -13,6 +27,7 @@ final class ContextualNoteFormatter: @unchecked Sendable {
         }
 
         guard #available(macOS 26.0, *) else {
+            logDebug("macOS 26.0 not available")
             completion(basicCleanup(source))
             return
         }
@@ -22,6 +37,7 @@ final class ContextualNoteFormatter: @unchecked Sendable {
             guardrails: .permissiveContentTransformations
         )
         guard model.isAvailable else {
+            logDebug("model.isAvailable is false")
             print("ℹ️ Apple Intelligence is unavailable; using basic punctuation cleanup")
             completion(basicCleanup(source))
             return
@@ -29,17 +45,18 @@ final class ContextualNoteFormatter: @unchecked Sendable {
 
         var completed = false
         let lock = NSLock()
-        func dispatchOnce(_ text: String) {
+        func dispatchOnce(_ text: String, _ reason: String = "") {
             lock.lock()
             defer { lock.unlock() }
             guard !completed else { return }
             completed = true
+            if !reason.isEmpty { logDebug("Returning because: \(reason)") }
             DispatchQueue.main.async { completion(text) }
         }
 
         // Safety timeout: if Apple Intelligence stalls for 180 seconds, dispatch basic cleanup immediately
         DispatchQueue.global().asyncAfter(deadline: .now() + 180) {
-            dispatchOnce(self.basicCleanup(source))
+            dispatchOnce(self.basicCleanup(source), "timeout")
         }
 
         Task {
@@ -55,8 +72,9 @@ final class ContextualNoteFormatter: @unchecked Sendable {
 
             var formattedChunks: [String] = []
             
-            for chunk in chunks {
+            for (idx, chunk) in chunks.enumerated() {
                 do {
+                    logDebug("Starting chunk \(idx), word count: \(chunk.split(separator: " ").count)")
                     let session = LanguageModelSession(
                         model: model,
                         instructions: Self.editorInstructions
@@ -71,19 +89,22 @@ final class ContextualNoteFormatter: @unchecked Sendable {
                         )
                     )
                     let candidate = self.emphasizeExplicitTakeaway(in: self.sanitize(response.content))
-                    let result = self.isFaithful(candidate, to: chunk) ? candidate : self.basicCleanup(chunk)
-                    if result != candidate {
-                        print("ℹ️ Note rewrite failed fidelity checks for a chunk; preserved the original wording")
+                    let isF = self.isFaithful(candidate, to: chunk)
+                    logDebug("Chunk \(idx) isFaithful: \(isF)")
+                    let result = isF ? candidate : self.basicCleanup(chunk)
+                    if !isF {
+                        logDebug("Fidelity check failed. Candidate length: \(candidate.count), Chunk length: \(chunk.count)")
+                        logDebug("Candidate:\n\(candidate)")
                     }
                     formattedChunks.append(result)
                 } catch {
-                    print("ℹ️ Contextual note formatting unavailable for chunk: \(error.localizedDescription)")
+                    logDebug("Chunk \(idx) error: \(error.localizedDescription)")
                     formattedChunks.append(self.basicCleanup(chunk))
                 }
             }
             
             let finalResult = formattedChunks.joined(separator: "\n\n")
-            dispatchOnce(finalResult)
+            dispatchOnce(finalResult, "success")
         }
     }
 
@@ -143,9 +164,9 @@ final class ContextualNoteFormatter: @unchecked Sendable {
         let sourceWords = source.split(whereSeparator: { $0.isWhitespace }).count
         let candidateWords = candidate.split(whereSeparator: { $0.isWhitespace }).count
         
-        // Relaxed fidelity check to allow formatting (lists, paragraphs) and grammar fixes
-        // As long as the length is roughly similar, we accept the LLM's output.
-        guard candidateWords >= max(1, Int(Double(sourceWords) * 0.50)),
+        // Relaxed fidelity check to allow formatting (lists, paragraphs), grammar fixes, and removal of conversational filler
+        // Spoken lectures can easily reduce in word count by 50-70% when properly formatted into concise notes.
+        guard candidateWords >= max(1, Int(Double(sourceWords) * 0.25)),
               candidateWords <= Int(Double(sourceWords) * 1.60) + 20 else {
             return false
         }
