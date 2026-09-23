@@ -144,22 +144,21 @@ final class AppState: ObservableObject {
     }
 
     private func launchBackendProcess() {
-        let python = "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3"
-        let script = "/Users/useralpha/Desktop/Work_Angad/Creation_hub/Eco-System/MacLocalDictation/Integration/Backend/server.py"
-        let workDir = "/Users/useralpha/Desktop/Work_Angad/Creation_hub/Eco-System/MacLocalDictation/Integration/Backend"
-
-        guard FileManager.default.fileExists(atPath: python) else {
-            backendLaunchFailed("Python 3.14 is missing")
+        guard let resourcePath = Bundle.main.resourcePath else {
+            backendLaunchFailed("App Resources not found")
             return
         }
+        let workDir = "\(resourcePath)/Backend"
+        let script = "\(workDir)/server.py"
+
         guard FileManager.default.fileExists(atPath: script) else {
-            backendLaunchFailed("Backend server.py is missing")
+            backendLaunchFailed("Backend server.py is missing in bundle")
             return
         }
 
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: python)
-        process.arguments = [script]
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-l", "-c", "python3 \"\(script)\""]
         process.currentDirectoryURL = URL(fileURLWithPath: workDir)
 
         var env = ProcessInfo.processInfo.environment
