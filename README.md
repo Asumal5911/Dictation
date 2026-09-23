@@ -13,3 +13,8 @@ I designed it specifically for note-taking. When you're sitting in a lecture, yo
 - **Smart Post-Processing (WIP):** 
   - Automatically analyzes and labels your transcriptions.
   - Uses context to correct sentences and make the text highly readable.
+
+## ⚠️ Quick Usage Notes
+Because this app runs locally and pastes directly into your workflow, there are two important things to keep in mind:
+1. **Cursor Focus is Required:** When you finish dictating and hit the checkmark (or confirm shortcut), the app will automatically type the transcribed text into your currently active window. Make sure you have actually clicked inside a document, note, or text field before confirming!
+2. **Give it a Second:** The local Whisper engine is fast, but it still has to think! Depending on how long you were speaking, it may take a couple of seconds to process and paste the final transcription. Just give it a brief moment to do its magic.
