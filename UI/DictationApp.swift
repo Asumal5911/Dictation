@@ -415,7 +415,7 @@ final class AppState: ObservableObject {
         request.setValue("audio/wav", forHTTPHeaderField: "Content-Type")
         request.setValue("\(audioData.count)", forHTTPHeaderField: "Content-Length")
         request.httpBody = audioData
-        request.timeoutInterval = 600
+        request.timeoutInterval = .infinity
 
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             DispatchQueue.main.async {
